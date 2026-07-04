@@ -4146,13 +4146,32 @@ export class BaileysStartupService extends ChannelStartupService {
           !!numberVerified?.exists,
           user.number,
           contacts.find((c) => c.remoteJid === numberJid)?.pushName,
-          undefined,
+          // VITTZ PATCH: pass through the real LID Baileys returned instead of discarding it.
+          (numberVerified as { lid?: unknown })?.lid ? String((numberVerified as { lid?: unknown }).lid) : undefined,
         );
       }),
     );
 
     // Combine results
     onWhatsapp.push(...verifiedUsers);
+
+    // VITTZ PATCH: for phone JIDs still missing a LID (cache hits skip Baileys), resolve it from
+    // Baileys' in-process LID mapping store — the same source used for call handling above.
+    for (const entry of onWhatsapp) {
+      const anyEntry = entry as unknown as { jid?: string; exists?: boolean; lid?: unknown };
+      if (!anyEntry.exists || !anyEntry.jid?.includes('@s.whatsapp.net')) continue;
+      if (anyEntry.lid && anyEntry.lid !== 'lid') continue;
+      try {
+        const mapped = await (
+          this.client.signalRepository as unknown as {
+            lidMapping?: { getLIDForPN?: (pn: string) => Promise<unknown> };
+          }
+        )?.lidMapping?.getLIDForPN?.(anyEntry.jid);
+        if (mapped) anyEntry.lid = String(mapped);
+      } catch {
+        // best-effort — response stays lid-less for this entry
+      }
+    }
 
     // TODO: Salvar no cache apenas números que NÃO estavam no cache
     const numbersToCache = onWhatsapp.filter((user) => {
