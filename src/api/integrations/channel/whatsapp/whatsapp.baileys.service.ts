@@ -4155,21 +4155,29 @@ export class BaileysStartupService extends ChannelStartupService {
     // Combine results
     onWhatsapp.push(...verifiedUsers);
 
-    // VITTZ PATCH: for phone JIDs still missing a LID (cache hits skip Baileys), resolve it from
-    // Baileys' in-process LID mapping store — the same source used for call handling above.
+    // VITTZ PATCH: enrich entries from Baileys' in-process LID mapping store — the same source
+    // used for call handling above. Phone JIDs gain their `lid` (cache hits skip Baileys); LID
+    // JIDs gain a `pn` property with the resolved phone JID (reverse lookup).
+    const lidMappingStore = (
+      this.client.signalRepository as unknown as {
+        lidMapping?: {
+          getLIDForPN?: (pn: string) => Promise<unknown>;
+          getPNForLID?: (lid: string) => Promise<unknown>;
+        };
+      }
+    )?.lidMapping;
     for (const entry of onWhatsapp) {
-      const anyEntry = entry as unknown as { jid?: string; exists?: boolean; lid?: unknown };
-      if (!anyEntry.exists || !anyEntry.jid?.includes('@s.whatsapp.net')) continue;
-      if (anyEntry.lid && anyEntry.lid !== 'lid') continue;
+      const anyEntry = entry as unknown as { jid?: string; exists?: boolean; lid?: unknown; pn?: string };
       try {
-        const mapped = await (
-          this.client.signalRepository as unknown as {
-            lidMapping?: { getLIDForPN?: (pn: string) => Promise<unknown> };
-          }
-        )?.lidMapping?.getLIDForPN?.(anyEntry.jid);
-        if (mapped) anyEntry.lid = String(mapped);
+        if (anyEntry.jid?.includes('@lid')) {
+          const pn = await lidMappingStore?.getPNForLID?.(anyEntry.jid);
+          if (pn) anyEntry.pn = String(pn);
+        } else if (anyEntry.exists && anyEntry.jid?.includes('@s.whatsapp.net') && (!anyEntry.lid || anyEntry.lid === 'lid')) {
+          const mapped = await lidMappingStore?.getLIDForPN?.(anyEntry.jid);
+          if (mapped) anyEntry.lid = String(mapped);
+        }
       } catch {
-        // best-effort — response stays lid-less for this entry
+        // best-effort — entry stays unenriched
       }
     }
 
